@@ -1,8 +1,9 @@
-from PIL import Image, ImageEnhance
+from PIL import Image, ImageEnhance, ImageFilter
 import argparse
 import sys
 import os
 import platform
+import re
 
 # Наборы символов для ASCII-арта
 ASCII_SETS = {
@@ -97,6 +98,55 @@ def preview_ascii(ascii_art, max_lines=20):
         return '\n'.join(lines[start:end])
     return ascii_art
 
+def apply_blur(image, blur_radius):
+    """Применение размытия к изображению"""
+    if blur_radius > 0:
+        return image.filter(ImageFilter.GaussianBlur(radius=blur_radius))
+    return image
+
+def get_visible_length(text):
+    """Получить видимую длину строки, игнорируя ANSI-коды"""
+    # Удаляем все ANSI escape последовательности
+    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+    return len(ansi_escape.sub('', text))
+
+def add_border(ascii_art, border_style='simple'):
+    """Добавление рамки вокруг ASCII-арта"""
+    lines = ascii_art.split('\n')
+    # Используем видимую длину строк
+    width = max(get_visible_length(line) for line in lines)
+    
+    # Разные стили рамок
+    borders = {
+        'simple': {'top': '-', 'bottom': '-', 'left': '|', 'right': '|',
+                  'top_left': '+', 'top_right': '+', 'bottom_left': '+', 'bottom_right': '+'},
+        'double': {'top': '═', 'bottom': '═', 'left': '║', 'right': '║',
+                  'top_left': '╔', 'top_right': '╗', 'bottom_left': '╚', 'bottom_right': '╝'},
+        'rounded': {'top': '─', 'bottom': '─', 'left': '│', 'right': '│',
+                   'top_left': '╭', 'top_right': '╮', 'bottom_left': '╰', 'bottom_right': '╯'}
+    }
+    
+    style = borders.get(border_style, borders['simple'])
+    
+    # Создание верхней и нижней границы
+    top_border = style['top_left'] + style['top'] * (width + 2) + style['top_right']
+    bottom_border = style['bottom_left'] + style['bottom'] * (width + 2) + style['bottom_right']
+    
+    # Добавление боковых границ к каждой строке с учетом цветовых кодов
+    bordered_lines = []
+    for line in lines:
+        visible_length = get_visible_length(line)
+        padding = ' ' * (width - visible_length)
+        # Если строка содержит цветовые коды, добавляем сброс цвета перед правой границей
+        if '\033[' in line:
+            bordered_line = f"{style['left']} {line}{padding} \033[0m{style['right']}"
+        else:
+            bordered_line = f"{style['left']} {line}{padding} {style['right']}"
+        bordered_lines.append(bordered_line)
+    
+    # Сборка финального ASCII-арта с рамкой
+    return '\n'.join([top_border] + bordered_lines + [bottom_border])
+
 def main():
     parser = argparse.ArgumentParser(description='Конвертер изображений в ASCII-арт')
     parser.add_argument('image', help='Путь к входному изображению')
@@ -114,7 +164,11 @@ def main():
                       help='Сохранить цветовую информацию (только для терминалов с поддержкой ANSI)')
     parser.add_argument('--preview', action='store_true',
                       help='Показать предпросмотр в консоли')
-    
+    parser.add_argument('--blur', type=float, default=0.0,
+                      help='Применить размытие (0.0 - без размытия, рекомендуемые значения 0.1-5.0)')
+    parser.add_argument('--border', choices=['simple', 'double', 'rounded', 'none'],
+                      default='none', help='Добавить рамку вокруг ASCII-арта')
+
     args = parser.parse_args()
 
     # Проверка поддержки цвета если запрошен цветной вывод
@@ -132,11 +186,16 @@ def main():
     # Обработка изображения
     image = resize_image(image, args.width, args.height)
     image = adjust_image(image, args.brightness, args.contrast)
+    image = apply_blur(image, args.blur)
     
     # Генерация ASCII
     chars = ASCII_SETS[args.ascii_set]
     ascii_pixels = pixels_to_ascii(image, chars, args.invert, args.color)
     ascii_art = create_ascii_art(ascii_pixels, args.width, args.color)
+
+    # Добавление рамки если требуется
+    if args.border != 'none':
+        ascii_art = add_border(ascii_art, args.border)
 
     # Вывод результата
     if args.preview:
